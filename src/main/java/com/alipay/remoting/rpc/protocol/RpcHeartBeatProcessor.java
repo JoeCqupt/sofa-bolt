@@ -73,6 +73,7 @@ public class RpcHeartBeatProcessor extends AbstractRemotingProcessor {
                 future.putResponse(msg);
                 future.cancelTimeout();
                 try {
+                    // 这里没有切换classloader
                     future.executeInvokeCallback();
                 } catch (Exception e) {
                     logger.error(

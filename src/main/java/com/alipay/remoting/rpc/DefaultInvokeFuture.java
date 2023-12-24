@@ -159,6 +159,7 @@ public class DefaultInvokeFuture implements InvokeFuture {
 
     @Override
     public void executeInvokeCallback() {
+        // TODO 其实可以在这里统一处理classloader的切换
         if (callbackListener != null) {
             if (this.executeCallbackOnlyOnce.compareAndSet(false, true)) {
                 callbackListener.onResponse(this);

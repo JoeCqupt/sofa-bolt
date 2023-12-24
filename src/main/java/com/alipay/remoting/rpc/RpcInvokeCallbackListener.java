@@ -19,6 +19,7 @@ package com.alipay.remoting.rpc;
 import java.util.concurrent.RejectedExecutionException;
 
 import com.alipay.remoting.*;
+import com.alipay.remoting.exception.RemotingException;
 import org.slf4j.Logger;
 
 import com.alipay.remoting.exception.CodecException;
@@ -40,7 +41,7 @@ public class RpcInvokeCallbackListener implements InvokeCallbackListener {
 
     private static final Logger logger = BoltLoggerFactory.getLogger("RpcRemoting");
 
-    private String              address;
+    private String address;
 
     public RpcInvokeCallbackListener() {
 
@@ -65,7 +66,7 @@ public class RpcInvokeCallbackListener implements InvokeCallbackListener {
                 } catch (RejectedExecutionException e) {
                     if (callback instanceof RejectionProcessableInvokeCallback) {
                         switch (((RejectionProcessableInvokeCallback) callback)
-                            .rejectedExecutionPolicy()) {
+                                .rejectedExecutionPolicy()) {
                             case CALLER_RUNS:
                                 task.run();
                                 break;
@@ -90,7 +91,7 @@ public class RpcInvokeCallbackListener implements InvokeCallbackListener {
     class CallbackTask implements Runnable {
 
         InvokeFuture future;
-        String       remoteAddress;
+        String remoteAddress;
 
         /**
          *
@@ -108,67 +109,23 @@ public class RpcInvokeCallbackListener implements InvokeCallbackListener {
             InvokeCallback callback = future.getInvokeCallback();
             // a lot of try-catches to protect thread pool
             ResponseCommand response = null;
+            // 统一处理请求
 
             try {
-                response = (ResponseCommand) future.waitResponse(0);
-            } catch (InterruptedException e) {
-                String msg = "Exception caught when getting response from InvokeFuture. The address is "
-                             + this.remoteAddress;
-                logger.error(msg, e);
-            }
-            if (response == null || response.getResponseStatus() != ResponseStatus.SUCCESS) {
                 try {
-                    Exception e;
-                    if (response == null) {
-                        e = new InvokeException("Exception caught in invocation. The address is "
-                                                + this.remoteAddress + " responseStatus:"
-                                                + ResponseStatus.UNKNOWN, future.getCause());
-                    } else {
-                        response.setInvokeContext(future.getInvokeContext());
-                        switch (response.getResponseStatus()) {
-                            case TIMEOUT:
-                                e = new InvokeTimeoutException(
-                                    "Invoke timeout when invoke with callback.The address is "
-                                            + this.remoteAddress);
-                                break;
-                            case CONNECTION_CLOSED:
-                                e = new ConnectionClosedException(
-                                    "Connection closed when invoke with callback.The address is "
-                                            + this.remoteAddress);
-                                break;
-                            case SERVER_THREADPOOL_BUSY:
-                                e = new InvokeServerBusyException(
-                                    "Server thread pool busy when invoke with callback.The address is "
-                                            + this.remoteAddress);
-                                break;
-                            case SERVER_EXCEPTION:
-                                String msg = "Server exception when invoke with callback.Please check the server log! The address is "
-                                             + this.remoteAddress;
-                                RpcResponseCommand resp = (RpcResponseCommand) response;
-                                resp.deserialize();
-                                Object ex = resp.getResponseObject();
-                                if (ex instanceof Throwable) {
-                                    e = new InvokeServerException(msg, (Throwable) ex);
-                                } else {
-                                    e = new InvokeServerException(msg);
-                                }
-                                break;
-                            default:
-                                e = new InvokeException(
-                                    "Exception caught in invocation. The address is "
-                                            + this.remoteAddress + " responseStatus:"
-                                            + response.getResponseStatus(), future.getCause());
+                    response = (ResponseCommand) future.waitResponse(0);
+                } catch (InterruptedException e) {
+                    String msg = "Exception caught when getting response from InvokeFuture. The address is "
+                            + this.remoteAddress;
+                    logger.error(msg, e);
 
-                        }
-                    }
-                    callback.onException(e);
-                } catch (Throwable e) {
-                    logger
-                        .error(
-                            "Exception occurred in user defined InvokeCallback#onException() logic, The address is {}",
-                            this.remoteAddress, e);
+                    throw new InvokeException("Exception caught in invocation. The address is "
+                            + this.remoteAddress + " responseStatus:"
+                            + ResponseStatus.UNKNOWN, future.getCause());
                 }
-            } else {
+
+                Object responseObj = RpcResponseResolver.resolveResponseObject(response, this.remoteAddress);
+
                 ClassLoader oldClassLoader = null;
                 try {
                     if (future.getAppClassLoader() != null) {
@@ -176,33 +133,38 @@ public class RpcInvokeCallbackListener implements InvokeCallbackListener {
                         Thread.currentThread().setContextClassLoader(future.getAppClassLoader());
                     }
                     response.setInvokeContext(future.getInvokeContext());
-                    RpcResponseCommand rpcResponse = (RpcResponseCommand) response;
-                    response.deserialize();
                     try {
-                        callback.onResponse(rpcResponse.getResponseObject());
+                        callback.onResponse(responseObj);
                     } catch (Throwable e) {
                         logger
-                            .error(
-                                "Exception occurred in user defined InvokeCallback#onResponse() logic.",
-                                e);
+                                .error(
+                                        "Exception occurred in user defined InvokeCallback#onResponse() logic.",
+                                        e);
                     }
-                } catch (CodecException e) {
-                    logger
-                        .error(
-                            "CodecException caught on when deserialize response in RpcInvokeCallbackListener. The address is {}.",
-                            this.remoteAddress, e);
                 } catch (Throwable e) {
                     logger.error(
-                        "Exception caught in RpcInvokeCallbackListener. The address is {}",
-                        this.remoteAddress, e);
+                            "Exception caught in RpcInvokeCallbackListener. The address is {}",
+                            this.remoteAddress, e);
                 } finally {
                     if (oldClassLoader != null) {
                         Thread.currentThread().setContextClassLoader(oldClassLoader);
                     }
                 }
-            } // enf of else
-        } // end of run
-    }
+
+            } catch (Throwable e) {
+
+                try {
+                    callback.onException(e);
+                } catch (Throwable throwable) {
+                    logger.error(
+                            "Exception occurred in user defined InvokeCallback#onException() logic, The address is {}",
+                            this.remoteAddress, throwable);
+                }
+
+            }
+        } // enf of else
+    } // end of run
+
 
     /**
      * @see com.alipay.remoting.InvokeCallbackListener#getRemoteAddress()
